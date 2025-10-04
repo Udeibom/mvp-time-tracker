@@ -8,88 +8,138 @@ import matplotlib.pyplot as plt
 import time
 
 # -----------------------------
-# Simple Authentication
+# Page Config
 # -----------------------------
-def login():
-    """Render login form and validate credentials"""
+st.set_page_config(page_title="MVP Time Tracker", layout="wide")
+
+# -----------------------------
+# Authentication
+# -----------------------------
+def login_page():
     st.title("🔐 MVP Time Tracker Login")
+    st.markdown("Welcome! Please log in as **Owner** or continue as **Guest**.")
+    
+    mode = st.radio("Login as:", ["Owner", "Guest"], horizontal=True)
 
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
+    if mode == "Owner":
+        user = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        login = st.button("Login")
 
-    if st.session_state.authenticated:
-        return True
-
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        correct_username = st.secrets["auth"]["username"]
-        correct_password = st.secrets["auth"]["password"]
-
-        if username == correct_username and password == correct_password:
-            st.session_state.authenticated = True
-            st.success("✅ Logged in successfully!")
+        if login:
+            if (
+                user == st.secrets["auth"]["owner_user"]
+                and password == st.secrets["auth"]["owner_pass"]
+            ):
+                st.session_state["auth_mode"] = "owner"
+                st.success("✅ Logged in as Owner")
+                st.rerun()
+            else:
+                st.error("❌ Invalid credentials. Try again.")
+    else:
+        if st.button("Continue as Guest"):
+            st.session_state["auth_mode"] = "guest"
+            st.success("👋 Logged in as Guest (session data only)")
             st.rerun()
-        else:
-            st.error("❌ Invalid credentials.")
-    return st.session_state.authenticated
 
 
-# 🔒 Protect app behind login
-if not login():
+if "auth_mode" not in st.session_state:
+    login_page()
     st.stop()
 
 # -----------------------------
-# Configuration
+# Database Setup (Owner / Guest)
 # -----------------------------
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEET_URL = st.secrets["sheet"]["url"]
-CREDS = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
-gc = gspread.authorize(CREDS)
-sh = gc.open_by_url(SHEET_URL)
+auth_mode = st.session_state["auth_mode"]
 
-try:
-    ws = sh.worksheet("sessions")
-except gspread.exceptions.WorksheetNotFound:
-    ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
-    ws.append_row(["id", "created_at", "date", "start_time", "end_time", "duration_hours", "project", "task_type", "notes", "focus_rating"])
+if auth_mode == "owner":
+    st.sidebar.success("🟢 Owner mode (Google Sheets connected)")
+
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    SHEET_URL = st.secrets["sheet"]["url"]
+    CREDS = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=SCOPES
+    )
+    gc = gspread.authorize(CREDS)
+    sh = gc.open_by_url(SHEET_URL)
+
+    try:
+        ws = sh.worksheet("sessions")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
+        ws.append_row(
+            [
+                "id",
+                "created_at",
+                "date",
+                "start_time",
+                "end_time",
+                "duration_hours",
+                "project",
+                "task_type",
+                "notes",
+                "focus_rating",
+            ]
+        )
+
+    def add_session(record):
+        row = [
+            record["id"],
+            record["created_at"],
+            record["date"],
+            record["start_time"],
+            record["end_time"],
+            record["duration_hours"],
+            record.get("project"),
+            record.get("task_type"),
+            record.get("notes"),
+            record.get("focus_rating"),
+        ]
+        ws.append_row(row)
+        return True
+
+    def fetch_df():
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+        df["start_time"] = pd.to_datetime(df["start_time"], errors="coerce")
+        df["end_time"] = pd.to_datetime(df["end_time"], errors="coerce")
+        df["duration_hours"] = pd.to_numeric(df["duration_hours"], errors="coerce").fillna(0)
+        return df
+
+else:
+    st.sidebar.warning("🟡 Guest mode (data not saved)")
+
+    if "guest_df" not in st.session_state:
+        st.session_state["guest_df"] = pd.DataFrame(
+            columns=[
+                "id",
+                "created_at",
+                "date",
+                "start_time",
+                "end_time",
+                "duration_hours",
+                "project",
+                "task_type",
+                "notes",
+                "focus_rating",
+            ]
+        )
+
+    def add_session(record):
+        st.session_state["guest_df"] = pd.concat(
+            [st.session_state["guest_df"], pd.DataFrame([record])], ignore_index=True
+        )
+        return True
+
+    def fetch_df():
+        return st.session_state["guest_df"]
 
 # -----------------------------
-# Database helpers
-# -----------------------------
-def add_session(record):
-    """Append a record as a new row in Google Sheet."""
-    row = [
-        record["id"],
-        record["created_at"],
-        record["date"],
-        record["start_time"],
-        record["end_time"],
-        record["duration_hours"],
-        record.get("project"),
-        record.get("task_type"),
-        record.get("notes"),
-        record.get("focus_rating"),
-    ]
-    ws.append_row(row)
-    return True
-
-def fetch_df():
-    """Read the full sheet as DataFrame."""
-    data = ws.get_all_records()
-    if not data:
-        return pd.DataFrame()
-    df = pd.DataFrame(data)
-    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df["start_time"] = pd.to_datetime(df["start_time"], errors="coerce")
-    df["end_time"] = pd.to_datetime(df["end_time"], errors="coerce")
-    df["duration_hours"] = pd.to_numeric(df["duration_hours"], errors="coerce").fillna(0)
-    return df
-
-# -----------------------------
-# Utilities
+# Utility Functions
 # -----------------------------
 def combine_date_time(d: date, t) -> datetime:
     return datetime.combine(d, t)
@@ -103,20 +153,13 @@ def compute_duration_hours(start_dt: datetime, end_dt: datetime) -> float:
     return round(seconds / 3600.0, 4)
 
 # -----------------------------
-# UI
+# Sidebar Navigation
 # -----------------------------
-st.set_page_config(page_title="MVP Time Tracker", layout="wide")
-st.title("MVP Time Tracker (Google Sheets Edition)")
-
 page = st.sidebar.radio("Go to", ["Log session", "Dashboard & Export"])
 
-# Add logout option
-st.sidebar.write("---")
-if st.sidebar.button("🚪 Logout"):
-    st.session_state.authenticated = False
-    st.rerun()
-
-# Ensure session state keys for timer
+# -----------------------------
+# Timer State
+# -----------------------------
 for key, val in {
     "timer_running": False,
     "timer_start": None,
@@ -127,31 +170,26 @@ for key, val in {
     if key not in st.session_state:
         st.session_state[key] = val
 
-# --- LOG SESSION PAGE ---
+# -----------------------------
+# LOG SESSION PAGE
+# -----------------------------
 if page == "Log session":
-    st.header("Log a session")
+    st.title("🕒 Log a Session")
     col1, col2 = st.columns([2, 1])
 
     # Manual entry
     with col1:
-        st.subheader("Manual entry")
         with st.form("manual_form"):
             d = st.date_input("Date", value=date.today())
-
-            if "manual_default_time" not in st.session_state:
-                st.session_state.manual_default_time = datetime.now().time().replace(microsecond=0)
-
-            s_time = st.time_input("Start time", value=st.session_state.manual_default_time, key="manual_start_time")
-
-            if "manual_end_time" not in st.session_state:
-                default_end_dt = datetime.combine(d, st.session_state.manual_default_time) + timedelta(minutes=30)
-                st.session_state.manual_end_time = default_end_dt.time().replace(microsecond=0)
-
-            e_time = st.time_input("End time", value=st.session_state.manual_end_time, key="manual_end_time")
+            s_time = st.time_input("Start time", datetime.now().time().replace(microsecond=0))
+            e_time = st.time_input(
+                "End time",
+                (datetime.now() + timedelta(minutes=30)).time().replace(microsecond=0),
+            )
 
             project = st.text_input("Project", value="Personal")
             task_type = st.text_input("Task type", value="Coding")
-            notes = st.text_area("Notes", value="")
+            notes = st.text_area("Notes")
             focus_rating = st.slider("Focus (1–5)", 1, 5, 3)
 
             start_dt = combine_date_time(d, s_time)
@@ -159,8 +197,7 @@ if page == "Log session":
             duration_preview = compute_duration_hours(start_dt, end_dt)
             st.markdown(f"**Duration (hours):** {duration_preview}")
 
-            submitted = st.form_submit_button("Log session")
-            if submitted:
+            if st.form_submit_button("Log session"):
                 record = {
                     "id": uuid.uuid4().hex,
                     "created_at": datetime.utcnow().isoformat(),
@@ -174,11 +211,11 @@ if page == "Log session":
                     "focus_rating": int(focus_rating),
                 }
                 add_session(record)
-                st.success("✅ Saved session to Google Sheet!")
+                st.success("✅ Session logged!")
 
-    # Quick timer
+    # Timer section
     with col2:
-        st.subheader("Quick timer")
+        st.subheader("Quick Timer")
 
         if not st.session_state.timer_running:
             if st.button("Start Timer"):
@@ -187,7 +224,7 @@ if page == "Log session":
                 st.session_state.timer_stopped = False
                 st.session_state.timer_end = None
                 st.session_state.timer_duration = 0.0
-                st.success(f"⏱ Timer started at {st.session_state.timer_start.strftime('%H:%M:%S')} (UTC)")
+                st.success("⏱ Timer started!")
         else:
             start_dt = st.session_state.timer_start
             placeholder = st.empty()
@@ -208,8 +245,8 @@ if page == "Log session":
                 time.sleep(1)
                 st.rerun()
 
-        if st.session_state.get("timer_stopped", False):
-            st.subheader("Log this timer session")
+        if st.session_state.timer_stopped:
+            st.subheader("Log this Timer Session")
             start_dt = st.session_state.timer_start
             end_dt = st.session_state.timer_end
             duration_hours = st.session_state.timer_duration
@@ -225,7 +262,7 @@ if page == "Log session":
                 task_type_t = st.text_input("Task type", value="Coding")
                 notes_t = st.text_area("Notes")
                 focus_rating_t = st.slider("Focus (1–5)", 1, 5, 3)
-                log_timer = st.form_submit_button("✅ Log timer session")
+                log_timer = st.form_submit_button("✅ Log Timer Session")
 
                 if log_timer:
                     record = {
@@ -241,21 +278,21 @@ if page == "Log session":
                         "focus_rating": int(focus_rating_t),
                     }
                     add_session(record)
-                    st.success("✅ Timer session saved to Google Sheet.")
+                    st.success("✅ Timer session logged!")
                     st.session_state.timer_running = False
                     st.session_state.timer_stopped = False
-                    st.session_state.timer_start = None
-                    st.session_state.timer_end = None
-                    st.session_state.timer_duration = 0.0
 
-# --- DASHBOARD PAGE ---
+# -----------------------------
+# DASHBOARD PAGE
+# -----------------------------
 else:
-    st.header("Dashboard & Export")
+    st.title("📊 Dashboard & Export")
     df = fetch_df()
+
     if df.empty:
-        st.info("No sessions logged yet. Go to 'Log session' to add one.")
+        st.info("No sessions logged yet.")
     else:
-        st.subheader("Recent sessions")
+        st.subheader("Recent Sessions")
         st.dataframe(df.sort_values("created_at", ascending=False).reset_index(drop=True))
 
         today = datetime.now().date()
@@ -266,7 +303,7 @@ else:
         weekly_total = df.loc[mask, "duration_hours"].sum()
         st.metric("This week's total hours", f"{weekly_total:.2f} h")
 
-        st.subheader("Daily hours (last 14 days)")
+        st.subheader("Daily Hours (Last 14 Days)")
         last_n_days = 14
         cutoff = today - timedelta(days=last_n_days - 1)
         df_recent = df[df["date_dt"] >= cutoff]
@@ -277,30 +314,32 @@ else:
         )
         fig1, ax1 = plt.subplots()
         ax1.bar([d.strftime("%Y-%m-%d") for d in daily.index], daily.values)
-        ax1.set_xticks(range(0, len(daily.index), max(1, len(daily.index)//7)))
-        ax1.set_ylabel("Hours")
-        ax1.set_title("Daily hours")
         plt.xticks(rotation=45, ha="right")
+        ax1.set_ylabel("Hours")
+        ax1.set_title("Daily Hours")
         st.pyplot(fig1)
 
-        st.subheader("Breakdown by project")
+        st.subheader("Breakdown by Project")
         by_project = df.groupby("project")["duration_hours"].sum().sort_values(ascending=False)
         fig2, ax2 = plt.subplots()
         ax2.barh(by_project.index, by_project.values)
         ax2.set_xlabel("Hours")
-        ax2.set_title("Hours by project")
+        ax2.set_title("Hours by Project")
         st.pyplot(fig2)
 
-        st.subheader("Breakdown by task type")
+        st.subheader("Breakdown by Task Type")
         by_task = df.groupby("task_type")["duration_hours"].sum().sort_values(ascending=False)
         fig3, ax3 = plt.subplots()
         ax3.barh(by_task.index, by_task.values)
         ax3.set_xlabel("Hours")
-        ax3.set_title("Hours by task type")
+        ax3.set_title("Hours by Task Type")
         st.pyplot(fig3)
 
         st.subheader("Export")
         csv = df.to_csv(index=False)
         st.download_button("Download CSV", csv, file_name="time_logs.csv", mime="text/csv")
 
-        st.success("✅ Dashboard generated from Google Sheets.")
+        if auth_mode == "guest":
+            st.warning("⚠️ You are in Guest mode — data is temporary and not saved.")
+        else:
+            st.success("✅ Dashboard loaded from Google Sheets.")
