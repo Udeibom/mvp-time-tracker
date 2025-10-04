@@ -1,81 +1,91 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+import gspread
+from google.oauth2.service_account import Credentials
 import uuid
 from datetime import datetime, date, timedelta
-from pathlib import Path
 import matplotlib.pyplot as plt
-import time  # standard library module (used for sleep)
+import time
+
+# -----------------------------
+# Simple Authentication
+# -----------------------------
+def login():
+    """Render login form and validate credentials"""
+    st.title("🔐 MVP Time Tracker Login")
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        correct_username = st.secrets["auth"]["username"]
+        correct_password = st.secrets["auth"]["password"]
+
+        if username == correct_username and password == correct_password:
+            st.session_state.authenticated = True
+            st.success("✅ Logged in successfully!")
+            st.rerun()
+        else:
+            st.error("❌ Invalid credentials.")
+    return st.session_state.authenticated
+
+
+# 🔒 Protect app behind login
+if not login():
+    st.stop()
 
 # -----------------------------
 # Configuration
 # -----------------------------
-DB_PATH = Path("data") / "sessions.db"
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SHEET_URL = st.secrets["sheet"]["url"]
+CREDS = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+gc = gspread.authorize(CREDS)
+sh = gc.open_by_url(SHEET_URL)
+
+try:
+    ws = sh.worksheet("sessions")
+except gspread.exceptions.WorksheetNotFound:
+    ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
+    ws.append_row(["id", "created_at", "date", "start_time", "end_time", "duration_hours", "project", "task_type", "notes", "focus_rating"])
 
 # -----------------------------
 # Database helpers
 # -----------------------------
-def init_db(db_path=DB_PATH):
-    conn = sqlite3.connect(str(db_path))
-    c = conn.cursor()
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            created_at TEXT,
-            date TEXT,
-            start_time TEXT,
-            end_time TEXT,
-            duration_hours REAL,
-            project TEXT,
-            task_type TEXT,
-            notes TEXT,
-            focus_rating INTEGER
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
+def add_session(record):
+    """Append a record as a new row in Google Sheet."""
+    row = [
+        record["id"],
+        record["created_at"],
+        record["date"],
+        record["start_time"],
+        record["end_time"],
+        record["duration_hours"],
+        record.get("project"),
+        record.get("task_type"),
+        record.get("notes"),
+        record.get("focus_rating"),
+    ]
+    ws.append_row(row)
+    return True
 
-
-def add_session(record, db_path=DB_PATH):
-    conn = sqlite3.connect(str(db_path))
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO sessions (id, created_at, date, start_time, end_time, duration_hours, project, task_type, notes, focus_rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            record["id"],
-            record["created_at"],
-            record["date"],
-            record["start_time"],
-            record["end_time"],
-            float(record["duration_hours"]),
-            record.get("project"),
-            record.get("task_type"),
-            record.get("notes"),
-            record.get("focus_rating"),
-        ),
-    )
-    conn.commit()
-    conn.close()
-
-
-def fetch_df(db_path=DB_PATH):
-    conn = sqlite3.connect(str(db_path))
-    try:
-        df = pd.read_sql_query("SELECT * FROM sessions", conn)
-    except Exception:
-        df = pd.DataFrame()
-    conn.close()
-    if df.empty:
-        return df
-
-    df["created_at"] = pd.to_datetime(df["created_at"])
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+def fetch_df():
+    """Read the full sheet as DataFrame."""
+    data = ws.get_all_records()
+    if not data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data)
+    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     df["start_time"] = pd.to_datetime(df["start_time"], errors="coerce")
     df["end_time"] = pd.to_datetime(df["end_time"], errors="coerce")
-    df["duration_hours"] = pd.to_numeric(df["duration_hours"])
+    df["duration_hours"] = pd.to_numeric(df["duration_hours"], errors="coerce").fillna(0)
     return df
 
 # -----------------------------
@@ -83,7 +93,6 @@ def fetch_df(db_path=DB_PATH):
 # -----------------------------
 def combine_date_time(d: date, t) -> datetime:
     return datetime.combine(d, t)
-
 
 def compute_duration_hours(start_dt: datetime, end_dt: datetime) -> float:
     if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
@@ -96,11 +105,16 @@ def compute_duration_hours(start_dt: datetime, end_dt: datetime) -> float:
 # -----------------------------
 # UI
 # -----------------------------
-init_db()
 st.set_page_config(page_title="MVP Time Tracker", layout="wide")
-st.title("MVP Time Tracker")
+st.title("MVP Time Tracker (Google Sheets Edition)")
 
 page = st.sidebar.radio("Go to", ["Log session", "Dashboard & Export"])
+
+# Add logout option
+st.sidebar.write("---")
+if st.sidebar.button("🚪 Logout"):
+    st.session_state.authenticated = False
+    st.rerun()
 
 # Ensure session state keys for timer
 for key, val in {
@@ -124,27 +138,16 @@ if page == "Log session":
         with st.form("manual_form"):
             d = st.date_input("Date", value=date.today())
 
-            # compute a stable default "now" once per session
             if "manual_default_time" not in st.session_state:
                 st.session_state.manual_default_time = datetime.now().time().replace(microsecond=0)
 
-            # give widgets unique keys
-            s_time = st.time_input(
-                "Start time",
-                value=st.session_state.manual_default_time,
-                key="manual_start_time",
-            )
+            s_time = st.time_input("Start time", value=st.session_state.manual_default_time, key="manual_start_time")
 
-            # sensible end-time default (30 mins after start) if not yet set
             if "manual_end_time" not in st.session_state:
                 default_end_dt = datetime.combine(d, st.session_state.manual_default_time) + timedelta(minutes=30)
                 st.session_state.manual_end_time = default_end_dt.time().replace(microsecond=0)
 
-            e_time = st.time_input(
-                "End time",
-                value=st.session_state.manual_end_time,
-                key="manual_end_time",
-            )
+            e_time = st.time_input("End time", value=st.session_state.manual_end_time, key="manual_end_time")
 
             project = st.text_input("Project", value="Personal")
             task_type = st.text_input("Task type", value="Coding")
@@ -171,7 +174,7 @@ if page == "Log session":
                     "focus_rating": int(focus_rating),
                 }
                 add_session(record)
-                st.success("✅ Saved session to local SQLite DB.")
+                st.success("✅ Saved session to Google Sheet!")
 
     # Quick timer
     with col2:
@@ -205,7 +208,6 @@ if page == "Log session":
                 time.sleep(1)
                 st.rerun()
 
-        # Show log form when stopped
         if st.session_state.get("timer_stopped", False):
             st.subheader("Log this timer session")
             start_dt = st.session_state.timer_start
@@ -239,7 +241,7 @@ if page == "Log session":
                         "focus_rating": int(focus_rating_t),
                     }
                     add_session(record)
-                    st.success("✅ Timer session saved to DB.")
+                    st.success("✅ Timer session saved to Google Sheet.")
                     st.session_state.timer_running = False
                     st.session_state.timer_stopped = False
                     st.session_state.timer_start = None
@@ -301,8 +303,4 @@ else:
         csv = df.to_csv(index=False)
         st.download_button("Download CSV", csv, file_name="time_logs.csv", mime="text/csv")
 
-        with open(str(DB_PATH), "rb") as f:
-            db_bytes = f.read()
-        st.download_button("Download SQLite DB", db_bytes, file_name="sessions.db", mime="application/octet-stream")
-
-        st.success("✅ Dashboard generated from local DB.")
+        st.success("✅ Dashboard generated from Google Sheets.")
