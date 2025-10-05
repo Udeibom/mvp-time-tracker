@@ -3,7 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import uuid
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta
 import matplotlib.pyplot as plt
 import time
 
@@ -48,33 +48,39 @@ if "auth_mode" not in st.session_state:
     st.stop()
 
 # -----------------------------
-# Google Sheets Connection (cached)
-# -----------------------------
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-@st.cache_resource
-def get_sheet_connection():
-    SHEET_URL = st.secrets["sheet"]["url"]
-    CREDS = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"], scopes=SCOPES
-    )
-    gc = gspread.authorize(CREDS)
-    sh = gc.open_by_url(SHEET_URL)
-    try:
-        ws = sh.worksheet("sessions")
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
-        ws.append_row(["id", "created_at", "date", "start_time", "end_time", "duration_hours", "project", "task_type", "notes", "focus_rating"])
-    return ws
-
-# -----------------------------
 # Database Setup (Owner / Guest)
 # -----------------------------
 auth_mode = st.session_state["auth_mode"]
 
 if auth_mode == "owner":
     st.sidebar.success("🟢 Owner mode (Google Sheets connected)")
-    ws = get_sheet_connection()
+
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    SHEET_URL = st.secrets["sheet"]["url"]
+    CREDS = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=SCOPES
+    )
+    gc = gspread.authorize(CREDS)
+    sh = gc.open_by_url(SHEET_URL)
+
+    try:
+        ws = sh.worksheet("sessions")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
+        ws.append_row(
+            [
+                "id",
+                "created_at",
+                "date",
+                "start_time",
+                "end_time",
+                "duration_hours",
+                "project",
+                "task_type",
+                "notes",
+                "focus_rating",
+            ]
+        )
 
     def add_session(record):
         row = [
@@ -152,7 +158,7 @@ def compute_duration_hours(start_dt: datetime, end_dt: datetime) -> float:
 page = st.sidebar.radio("Go to", ["Log session", "Dashboard & Export"])
 
 # -----------------------------
-# Timer State Initialization
+# Timer State
 # -----------------------------
 for key, val in {
     "timer_running": False,
@@ -194,7 +200,7 @@ if page == "Log session":
             if st.form_submit_button("Log session"):
                 record = {
                     "id": uuid.uuid4().hex,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.utcnow().isoformat(),
                     "date": d.isoformat(),
                     "start_time": start_dt.isoformat(),
                     "end_time": end_dt.isoformat(),
@@ -207,39 +213,37 @@ if page == "Log session":
                 add_session(record)
                 st.success("✅ Session logged!")
 
-    # --- Quick timer ---
+    # Timer section
     with col2:
-        st.subheader("Quick timer")
+        st.subheader("Quick Timer")
 
         if not st.session_state.timer_running:
             if st.button("Start Timer"):
-                st.session_state.timer_start = datetime.now(timezone.utc)
+                st.session_state.timer_start = datetime.utcnow()
                 st.session_state.timer_running = True
                 st.session_state.timer_stopped = False
                 st.session_state.timer_end = None
                 st.session_state.timer_duration = 0.0
-                st.success(f"⏱ Timer started at {st.session_state.timer_start.strftime('%H:%M:%S')} (UTC)")
+                st.success("⏱ Timer started!")
         else:
             start_dt = st.session_state.timer_start
-            elapsed_placeholder = st.empty()
+            placeholder = st.empty()
+            elapsed = datetime.utcnow() - start_dt
+            hours = elapsed.total_seconds() / 3600
+            placeholder.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
 
-            # Live update loop (no rerun)
-            while st.session_state.timer_running:
-                elapsed = datetime.now(timezone.utc) - start_dt
-                hours = elapsed.total_seconds() / 3600
-                elapsed_placeholder.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
-
-                # Stop button inside loop
-                if st.button("Stop Timer"):
-                    end_dt = datetime.now(timezone.utc)
-                    duration_hours = compute_duration_hours(start_dt, end_dt)
-                    st.session_state.timer_end = end_dt
-                    st.session_state.timer_duration = duration_hours
-                    st.session_state.timer_running = False
-                    st.session_state.timer_stopped = True
-                    st.success(f"✅ Timer stopped. Duration: {duration_hours:.3f} hours")
-                    st.experimental_rerun()
+            if st.button("Stop Timer"):
+                end_dt = datetime.utcnow()
+                duration_hours = compute_duration_hours(start_dt, end_dt)
+                st.session_state.timer_end = end_dt
+                st.session_state.timer_duration = duration_hours
+                st.session_state.timer_running = False
+                st.session_state.timer_stopped = True
+                st.success(f"✅ Timer stopped. Duration: {duration_hours:.3f} hours")
+                st.rerun()
+            else:
                 time.sleep(1)
+                st.rerun()
 
         if st.session_state.timer_stopped:
             st.subheader("Log this Timer Session")
@@ -263,7 +267,7 @@ if page == "Log session":
                 if log_timer:
                     record = {
                         "id": uuid.uuid4().hex,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "created_at": datetime.utcnow().isoformat(),
                         "date": start_dt.date().isoformat(),
                         "start_time": start_dt.isoformat(),
                         "end_time": end_dt.isoformat(),
