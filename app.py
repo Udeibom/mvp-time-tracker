@@ -3,7 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import matplotlib.pyplot as plt
 import time
 
@@ -33,14 +33,14 @@ def login_page():
             ):
                 st.session_state["auth_mode"] = "owner"
                 st.success("✅ Logged in as Owner")
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.error("❌ Invalid credentials. Try again.")
     else:
         if st.button("Continue as Guest"):
             st.session_state["auth_mode"] = "guest"
             st.success("👋 Logged in as Guest (session data only)")
-            st.rerun()
+            st.experimental_rerun()
 
 
 if "auth_mode" not in st.session_state:
@@ -48,26 +48,24 @@ if "auth_mode" not in st.session_state:
     st.stop()
 
 # -----------------------------
-# Database Setup (Owner / Guest)
+# Cached Google Sheets connection (Owner)
 # -----------------------------
-auth_mode = st.session_state["auth_mode"]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-if auth_mode == "owner":
-    st.sidebar.success("🟢 Owner mode (Google Sheets connected)")
-
-    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+@st.cache_resource
+def get_sheet_connection():
+    """Open and return the 'sessions' worksheet (cached to avoid repeated API calls)."""
     SHEET_URL = st.secrets["sheet"]["url"]
     CREDS = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"], scopes=SCOPES
     )
     gc = gspread.authorize(CREDS)
     sh = gc.open_by_url(SHEET_URL)
-
     try:
-        ws = sh.worksheet("sessions")
+        ws_local = sh.worksheet("sessions")
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
-        ws.append_row(
+        ws_local = sh.add_worksheet(title="sessions", rows="100", cols="10")
+        ws_local.append_row(
             [
                 "id",
                 "created_at",
@@ -81,6 +79,28 @@ if auth_mode == "owner":
                 "focus_rating",
             ]
         )
+    return ws_local
+
+# -----------------------------
+# Database Setup (Owner / Guest)
+# -----------------------------
+auth_mode = st.session_state["auth_mode"]
+
+# Add a logout button (useful)
+with st.sidebar:
+    st.markdown("---")
+    if st.button("🔓 Logout"):
+        # Clear session state safely
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.success("✅ Logged out")
+        st.experimental_rerun()
+
+if auth_mode == "owner":
+    st.sidebar.success("🟢 Owner mode (Google Sheets connected)")
+
+    # Use cached connection
+    ws = get_sheet_connection()
 
     def add_session(record):
         row = [
@@ -200,7 +220,7 @@ if page == "Log session":
             if st.form_submit_button("Log session"):
                 record = {
                     "id": uuid.uuid4().hex,
-                    "created_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                     "date": d.isoformat(),
                     "start_time": start_dt.isoformat(),
                     "end_time": end_dt.isoformat(),
@@ -217,33 +237,40 @@ if page == "Log session":
     with col2:
         st.subheader("Quick Timer")
 
+        # START: set start time and immediately rerun so UI switches to timer display right away
         if not st.session_state.timer_running:
             if st.button("Start Timer"):
-                st.session_state.timer_start = datetime.utcnow()
+                st.session_state.timer_start = datetime.now(timezone.utc)
                 st.session_state.timer_running = True
                 st.session_state.timer_stopped = False
                 st.session_state.timer_end = None
                 st.session_state.timer_duration = 0.0
                 st.success("⏱ Timer started!")
+                # immediate rerun so the else branch shows elapsed
+                st.experimental_rerun()
         else:
             start_dt = st.session_state.timer_start
             placeholder = st.empty()
-            elapsed = datetime.utcnow() - start_dt
+            # compute elapsed based on timezone-aware now
+            elapsed = datetime.now(timezone.utc) - start_dt
             hours = elapsed.total_seconds() / 3600
             placeholder.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
 
+            # Stop button shown while running
             if st.button("Stop Timer"):
-                end_dt = datetime.utcnow()
+                end_dt = datetime.now(timezone.utc)
                 duration_hours = compute_duration_hours(start_dt, end_dt)
                 st.session_state.timer_end = end_dt
                 st.session_state.timer_duration = duration_hours
                 st.session_state.timer_running = False
                 st.session_state.timer_stopped = True
                 st.success(f"✅ Timer stopped. Duration: {duration_hours:.3f} hours")
-                st.rerun()
+                # rerun to refresh UI (now shows the log form)
+                st.experimental_rerun()
             else:
+                # lightweight pause then rerun to update elapsed display
                 time.sleep(1)
-                st.rerun()
+                st.experimental_rerun()
 
         if st.session_state.timer_stopped:
             st.subheader("Log this Timer Session")
@@ -267,7 +294,7 @@ if page == "Log session":
                 if log_timer:
                     record = {
                         "id": uuid.uuid4().hex,
-                        "created_at": datetime.utcnow().isoformat(),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
                         "date": start_dt.date().isoformat(),
                         "start_time": start_dt.isoformat(),
                         "end_time": end_dt.isoformat(),
@@ -279,8 +306,12 @@ if page == "Log session":
                     }
                     add_session(record)
                     st.success("✅ Timer session logged!")
+                    # reset timer state
                     st.session_state.timer_running = False
                     st.session_state.timer_stopped = False
+                    st.session_state.timer_start = None
+                    st.session_state.timer_end = None
+                    st.session_state.timer_duration = 0.0
 
 # -----------------------------
 # DASHBOARD PAGE
