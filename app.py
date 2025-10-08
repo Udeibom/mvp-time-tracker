@@ -57,17 +57,29 @@ if auth_mode == "owner":
 
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
     SHEET_URL = st.secrets["sheet"]["url"]
-    CREDS = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"], scopes=SCOPES
-    )
-    gc = gspread.authorize(CREDS)
-    sh = gc.open_by_url(SHEET_URL)
 
+    # Cache gspread objects in session_state so repeated reruns don't reopen the sheet every time
+    if "gspread_client" not in st.session_state:
+        CREDS = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"], scopes=SCOPES
+        )
+        st.session_state["gspread_client"] = gspread.authorize(CREDS)
+
+    gc = st.session_state["gspread_client"]
+
+    if "gspread_sh" not in st.session_state:
+        # open_by_url will run once and then be reused across reruns
+        st.session_state["gspread_sh"] = gc.open_by_url(SHEET_URL)
+
+    sh = st.session_state["gspread_sh"]
+
+    # Ensure worksheet exists (only create / append header once)
     try:
-        ws = sh.worksheet("sessions")
+        if "sessions_ws" not in st.session_state:
+            st.session_state["sessions_ws"] = sh.worksheet("sessions")
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title="sessions", rows="100", cols="10")
-        ws.append_row(
+        st.session_state["sessions_ws"] = sh.add_worksheet(title="sessions", rows="100", cols="10")
+        st.session_state["sessions_ws"].append_row(
             [
                 "id",
                 "created_at",
@@ -82,7 +94,10 @@ if auth_mode == "owner":
             ]
         )
 
+    ws = st.session_state["sessions_ws"]
+
     def add_session(record):
+        # use the cached worksheet
         row = [
             record["id"],
             record["created_at"],
@@ -166,6 +181,7 @@ for key, val in {
     "timer_end": None,
     "timer_duration": 0.0,
     "timer_stopped": False,
+    "timer_message": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
@@ -217,22 +233,34 @@ if page == "Log session":
     with col2:
         st.subheader("Quick Timer")
 
+        # If not running -> show Start button
         if not st.session_state.timer_running:
-            if st.button("Start Timer"):
-                st.session_state.timer_start = datetime.utcnow()
-                st.session_state.timer_running = True
-                st.session_state.timer_stopped = False
-                st.session_state.timer_end = None
-                st.session_state.timer_duration = 0.0
-                st.success("⏱ Timer started!")
+            # Use a keyed button and guard to reduce chance of accidental double-start
+            if st.button("Start Timer", key="start_timer_btn"):
+                # double-check guard (in case of race)
+                if not st.session_state.timer_running:
+                    st.session_state.timer_start = datetime.utcnow()
+                    st.session_state.timer_running = True
+                    st.session_state.timer_stopped = False
+                    st.session_state.timer_end = None
+                    st.session_state.timer_duration = 0.0
+                    st.session_state.timer_message = "started"
+                    # Immediately rerun so the UI shows elapsed/stop right away
+                    st.rerun()
         else:
+            # Running: show optional "Timer started!" once then show elapsed and Stop button
             start_dt = st.session_state.timer_start
-            placeholder = st.empty()
+
+            if st.session_state.get("timer_message") == "started":
+                st.success("⏱ Timer started!")
+                # clear the message so it only shows once (on immediate rerun)
+                st.session_state["timer_message"] = None
+
             elapsed = datetime.utcnow() - start_dt
             hours = elapsed.total_seconds() / 3600
-            placeholder.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
+            st.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
 
-            if st.button("Stop Timer"):
+            if st.button("Stop Timer", key="stop_timer_btn"):
                 end_dt = datetime.utcnow()
                 duration_hours = compute_duration_hours(start_dt, end_dt)
                 st.session_state.timer_end = end_dt
@@ -242,6 +270,7 @@ if page == "Log session":
                 st.success(f"✅ Timer stopped. Duration: {duration_hours:.3f} hours")
                 st.rerun()
             else:
+                # refresh every second to update elapsed time
                 time.sleep(1)
                 st.rerun()
 
