@@ -181,7 +181,6 @@ for key, val in {
     "timer_end": None,
     "timer_duration": 0.0,
     "timer_stopped": False,
-    "timer_message": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
@@ -233,33 +232,16 @@ if page == "Log session":
     with col2:
         st.subheader("Quick Timer")
 
-        # If not running -> show Start button
-        if not st.session_state.timer_running:
-            # Use a keyed button and guard to reduce chance of accidental double-start
-            if st.button("Start Timer", key="start_timer_btn"):
-                # double-check guard (in case of race)
-                if not st.session_state.timer_running:
-                    st.session_state.timer_start = datetime.utcnow()
-                    st.session_state.timer_running = True
-                    st.session_state.timer_stopped = False
-                    st.session_state.timer_end = None
-                    st.session_state.timer_duration = 0.0
-                    st.session_state.timer_message = "started"
-                    # Immediately rerun so the UI shows elapsed/stop right away
-                    st.rerun()
-        else:
-            # Running: show optional "Timer started!" once then show elapsed and Stop button
+        def render_running_ui():
+            """Show elapsed time and Stop button for the currently running timer."""
             start_dt = st.session_state.timer_start
-
-            if st.session_state.get("timer_message") == "started":
-                st.success("⏱ Timer started!")
-                # clear the message so it only shows once (on immediate rerun)
-                st.session_state["timer_message"] = None
-
+            if not start_dt:
+                return
             elapsed = datetime.utcnow() - start_dt
             hours = elapsed.total_seconds() / 3600
             st.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
 
+            # Stop button (unique key)
             if st.button("Stop Timer", key="stop_timer_btn"):
                 end_dt = datetime.utcnow()
                 duration_hours = compute_duration_hours(start_dt, end_dt)
@@ -268,11 +250,23 @@ if page == "Log session":
                 st.session_state.timer_running = False
                 st.session_state.timer_stopped = True
                 st.success(f"✅ Timer stopped. Duration: {duration_hours:.3f} hours")
+                # Rerun to show the "Log this Timer Session" UI
                 st.rerun()
-            else:
-                # refresh every second to update elapsed time
-                time.sleep(1)
-                st.rerun()
+
+        # If not running -> show Start button
+        if not st.session_state.timer_running:
+            if st.button("Start Timer", key="start_timer_btn"):
+                # set timer state and immediately render the running UI in this run
+                st.session_state.timer_start = datetime.utcnow()
+                st.session_state.timer_running = True
+                st.session_state.timer_stopped = False
+                st.session_state.timer_end = None
+                st.session_state.timer_duration = 0.0
+                # Render running UI immediately (no st.rerun needed)
+                render_running_ui()
+        else:
+            # Timer is running (normal path on reruns)
+            render_running_ui()
 
         if st.session_state.timer_stopped:
             st.subheader("Log this Timer Session")
