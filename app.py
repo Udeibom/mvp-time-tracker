@@ -207,19 +207,26 @@ if page == "Log session":
             notes = st.text_area("Notes")
             focus_rating = st.slider("Focus (1–5)", 1, 5, 3)
 
+            # Preview: compute duration for display while the form is open
             start_dt = combine_date_time(d, s_time)
             end_dt = combine_date_time(d, e_time)
             duration_preview = compute_duration_hours(start_dt, end_dt)
             st.markdown(f"**Duration (hours):** {duration_preview}")
 
+            # When the user submits the form, recompute start/end and duration right then
             if st.form_submit_button("Log session"):
+                # Recompute using the live values from the form inputs
+                submitted_start_dt = combine_date_time(d, s_time)
+                submitted_end_dt = combine_date_time(d, e_time)
+                submitted_duration = compute_duration_hours(submitted_start_dt, submitted_end_dt)
+
                 record = {
                     "id": uuid.uuid4().hex,
                     "created_at": datetime.utcnow().isoformat(),
                     "date": d.isoformat(),
-                    "start_time": start_dt.isoformat(),
-                    "end_time": end_dt.isoformat(),
-                    "duration_hours": duration_preview,
+                    "start_time": submitted_start_dt.isoformat(),
+                    "end_time": submitted_end_dt.isoformat(),
+                    "duration_hours": submitted_duration,
                     "project": project,
                     "task_type": task_type,
                     "notes": notes,
