@@ -194,43 +194,63 @@ if page == "Log session":
 
     # Manual entry
     with col1:
+        # Use explicit widget keys so values persist across reruns (especially while timer auto-refresh runs)
         with st.form("manual_form"):
-            d = st.date_input("Date", value=date.today())
-            s_time = st.time_input("Start time", datetime.now().time().replace(microsecond=0))
+            d = st.date_input(
+                "Date", value=date.today(), key="manual_date"
+            )
+            s_time = st.time_input(
+                "Start time",
+                datetime.now().time().replace(microsecond=0),
+                key="manual_s_time",
+            )
             e_time = st.time_input(
                 "End time",
                 (datetime.now() + timedelta(minutes=30)).time().replace(microsecond=0),
+                key="manual_e_time",
             )
 
-            project = st.text_input("Project", value="Personal")
-            task_type = st.text_input("Task type", value="Coding")
-            notes = st.text_area("Notes")
-            focus_rating = st.slider("Focus (1–5)", 1, 5, 3)
+            project = st.text_input("Project", value="Personal", key="manual_project")
+            task_type = st.text_input("Task type", value="Coding", key="manual_task_type")
+            notes = st.text_area("Notes", key="manual_notes")
+            focus_rating = st.slider("Focus (1–5)", 1, 5, 3, key="manual_focus_rating")
 
-            # Preview: compute duration for display while the form is open
-            start_dt = combine_date_time(d, s_time)
-            end_dt = combine_date_time(d, e_time)
-            duration_preview = compute_duration_hours(start_dt, end_dt)
+            # Preview: compute duration for display while the form is open (use st.session_state to be robust)
+            # use get with fallback to current variables so preview updates even during reruns
+            preview_date = st.session_state.get("manual_date", d)
+            preview_s_time = st.session_state.get("manual_s_time", s_time)
+            preview_e_time = st.session_state.get("manual_e_time", e_time)
+            preview_start_dt = combine_date_time(preview_date, preview_s_time)
+            preview_end_dt = combine_date_time(preview_date, preview_e_time)
+            duration_preview = compute_duration_hours(preview_start_dt, preview_end_dt)
             st.markdown(f"**Duration (hours):** {duration_preview}")
 
-            # When the user submits the form, recompute start/end and duration right then
+            # When the user submits the form, recompute start/end and duration using st.session_state values
             if st.form_submit_button("Log session"):
-                # Recompute using the live values from the form inputs
-                submitted_start_dt = combine_date_time(d, s_time)
-                submitted_end_dt = combine_date_time(d, e_time)
+                # Pull final values from session_state (these reflect the exact widget state on submit)
+                final_date = st.session_state["manual_date"]
+                final_s_time = st.session_state["manual_s_time"]
+                final_e_time = st.session_state["manual_e_time"]
+                final_project = st.session_state["manual_project"]
+                final_task_type = st.session_state["manual_task_type"]
+                final_notes = st.session_state["manual_notes"]
+                final_focus_rating = st.session_state["manual_focus_rating"]
+
+                submitted_start_dt = combine_date_time(final_date, final_s_time)
+                submitted_end_dt = combine_date_time(final_date, final_e_time)
                 submitted_duration = compute_duration_hours(submitted_start_dt, submitted_end_dt)
 
                 record = {
                     "id": uuid.uuid4().hex,
                     "created_at": datetime.utcnow().isoformat(),
-                    "date": d.isoformat(),
+                    "date": final_date.isoformat(),
                     "start_time": submitted_start_dt.isoformat(),
                     "end_time": submitted_end_dt.isoformat(),
                     "duration_hours": submitted_duration,
-                    "project": project,
-                    "task_type": task_type,
-                    "notes": notes,
-                    "focus_rating": int(focus_rating),
+                    "project": final_project,
+                    "task_type": final_task_type,
+                    "notes": final_notes,
+                    "focus_rating": int(final_focus_rating),
                 }
                 add_session(record)
                 st.success("✅ Session logged!")
