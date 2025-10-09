@@ -233,7 +233,9 @@ if page == "Log session":
         st.subheader("Quick Timer")
 
         def render_running_ui():
-            """Show elapsed time and Stop button for the currently running timer."""
+            """Show elapsed time and Stop button for the currently running timer.
+               Also auto-refresh once per second to update elapsed time.
+            """
             start_dt = st.session_state.timer_start
             if not start_dt:
                 return
@@ -241,7 +243,7 @@ if page == "Log session":
             hours = elapsed.total_seconds() / 3600
             st.info(f"⏳ Elapsed time: **{hours:.3f} hours**")
 
-            # Stop button (unique key)
+            # Check Stop button first so it acts immediately
             if st.button("Stop Timer", key="stop_timer_btn"):
                 end_dt = datetime.utcnow()
                 duration_hours = compute_duration_hours(start_dt, end_dt)
@@ -251,6 +253,12 @@ if page == "Log session":
                 st.session_state.timer_stopped = True
                 st.success(f"✅ Timer stopped. Duration: {duration_hours:.3f} hours")
                 # Rerun to show the "Log this Timer Session" UI
+                st.rerun()
+            else:
+                # No Stop click this run — sleep briefly and rerun to update elapsed.
+                # This rerun is safe because gspread objects are cached in session_state,
+                # so we will not re-open the sheet on every refresh.
+                time.sleep(1)
                 st.rerun()
 
         # If not running -> show Start button
@@ -262,7 +270,7 @@ if page == "Log session":
                 st.session_state.timer_stopped = False
                 st.session_state.timer_end = None
                 st.session_state.timer_duration = 0.0
-                # Render running UI immediately (no st.rerun needed)
+                # Render running UI immediately (will enter auto-refresh there)
                 render_running_ui()
         else:
             # Timer is running (normal path on reruns)
