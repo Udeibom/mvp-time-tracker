@@ -52,12 +52,12 @@ It’s built in three progressive stages:
 ```bash
 git clone https://github.com/your-username/mvp-time-tracker.git
 cd mvp-time-tracker
-```   ← ✅ Close the code block here
+```   
 
 ### 2. Install dependencies
 ```bash
 pip install -r requirements.txt
-```   ← ✅ Close the code block here
+```   
 
 ### 3. Set up Google Sheets API credentials
 
@@ -69,7 +69,7 @@ pip install -r requirements.txt
 ### 4. Run the app
 ```bash
 streamlit run app.py
-```   ← ✅ Close the code block here
+```   
 
 ### 5. Access the app
 
@@ -108,3 +108,4 @@ This project is licensed under the **MIT License** feel free to use, modify, and
 
 **Caleb Udeibom**  
 *Machine Learning Engineer*
+
